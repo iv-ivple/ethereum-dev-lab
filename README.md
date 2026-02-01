@@ -472,4 +472,119 @@ def sample_data():
 
 --------------------------------------------------------
 
+## Week 8-10: Flask Wallet Watcher API
+
+### What I Built
+A production-ready REST API that monitors Ethereum wallets, tracks transactions, and sends balance alerts.
+
+### Features
+- ✅ Wallet registration and monitoring
+- ✅ Transaction history tracking
+- ✅ Balance alert system
+- ✅ API key authentication
+- ✅ Rate limiting
+- ✅ Background worker for continuous monitoring
+- ✅ Deployed to production
+
+### Tech Stack
+- Flask (web framework)
+- SQLAlchemy (database ORM)
+- APScheduler (background jobs)
+- Web3.py (Ethereum interaction)
+- PostgreSQL (production database)
+- Render (hosting platform)
+
+### Documentation
+- [API Documentation](./README_API.md) - Complete API reference
+- [Deployment Guide](./DEPLOYMENT.md) - How to deploy
+
+### Live API
+🔗 https://wallet-watcher-api.onrender.com/
+
+### Test It Out
+```bash
+# Create an API key first, then:
+curl -H "X-API-Key: YOUR_KEY" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"address": "0xYOUR_WALLET", "label": "Test"}' \
+  https://your-app.onrender.com/api/v1/wallets
+```
+
+-----------------------------------------------------------------------------
+
+# Docker Deployment Guide
+
+## Quick Start
+
+### Development
+```bash
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+### Production
+```bash
+# Build and start
+docker-compose -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose -f docker-compose.prod.yml logs -f
+```
+
+## Architecture
+```
+┌─────────────────┐
+│   Flask API     │ :5000
+│  (Gunicorn)     │
+└────────┬────────┘
+         │
+         ↓
+┌─────────────────┐
+│   PostgreSQL    │ :5432
+│   (Database)    │
+└─────────────────┘
+```
+
+## Environment Variables
+
+Required:
+- `RPC_URL`: Ethereum RPC endpoint
+- `SECRET_KEY`: Flask secret key
+- `DATABASE_URL`: PostgreSQL connection string
+
+## Volumes
+
+- `postgres_data`: Database persistence
+- `./logs`: Application logs
+
+## Health Checks
+
+- API: `http://localhost:5000/api/v1/health`
+- Database: `pg_isready` check every 10s
+
+## Troubleshooting
+
+### Container won't start
+```bash
+docker-compose logs api
+docker-compose ps
+```
+
+### Database connection failed
+```bash
+docker-compose exec db psql -U walletuser -d walletwatcher
+```
+
+### Reset everything
+```bash
+docker-compose down -v
+docker system prune -a
+```
 
