@@ -587,4 +587,321 @@ docker-compose exec db psql -U walletuser -d walletwatcher
 docker-compose down -v
 docker system prune -a
 ```
+-----------------------------------------------------------------------------
 
+# Web3 Telegram Bot
+
+A Telegram bot for interacting with Ethereum blockchain - check balances, gas prices, token prices, and track wallets.
+
+## Features
+
+✅ Check ETH balances
+✅ Get current gas prices
+✅ Fetch token prices from DEXs
+✅ Track multiple wallets
+✅ Inline keyboards for quick actions
+✅ Rate limiting and error handling
+
+## Commands
+
+- `/start` - Welcome message and bot introduction
+- `/help` - Show all available commands
+- `/balance <address>` - Check ETH balance
+- `/gas` - Get current gas prices
+- `/price <token>` - Get token price (ETH, BTC, USDC, etc.)
+- `/track <address> [label]` - Add wallet to tracking
+- `/mywallets` - Show all tracked wallets
+- `/untrack <address>` - Stop tracking wallet
+
+## Setup
+
+### Prerequisites
+
+- Python 3.10+
+- Telegram account
+- Ethereum RPC endpoint (Infura/Alchemy)
+
+### Installation
+
+1. Clone repository:
+```bash
+git clone <your-repo>
+cd telegram-web3-bot
+```
+
+2. Create virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Configure environment:
+```bash
+cp .env.example .env
+# Edit .env with your values
+```
+
+5. Run the bot:
+```bash
+python bot.py
+```
+
+## Configuration
+
+Required environment variables in `.env`:
+```env
+TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
+RPC_URL=your_ethereum_rpc_url
+ADMIN_USER_ID=your_telegram_user_id
+```
+
+## Project Structure
+telegram-web3-bot/
+├── bot.py                 # Main bot application
+├── config.py              # Configuration management
+├── requirements.txt       # Python dependencies
+├── .env                   # Environment variables (not committed)
+├── handlers/
+│   ├── basic.py          # Basic commands (/start, /help)
+│   ├── blockchain.py     # Blockchain commands
+│   └── callbacks.py      # Inline keyboard handlers
+├── utils/
+│   ├── web3_helper.py    # Web3 utilities
+│   ├── validators.py     # Input validation
+│   ├── database.py       # Database management
+│   └── rate_limiter.py   # Rate limiting
+├── data/
+│   └── bot_data.db       # SQLite database
+└── tests/
+└── test_bot.py       # Unit tests
+
+## Development
+
+Run tests:
+```bash
+pytest tests/
+```
+
+Check code style:
+```bash
+flake8 .
+black .
+```
+
+## Security
+
+- Bot token is stored in environment variables
+- Input validation on all user inputs
+- Rate limiting to prevent abuse
+- SQL injection prevention with parameterized queries
+
+## License
+
+MIT
+
+## Contact
+
+Iv Ple - @ivivple
+
+-----------------------------------------------------------------------------
+----------------------------------------------------------------
+
+## Weeks 16-18: Advanced Telegram Bot Analytics
+
+### What I Learned
+- **The Graph Protocol**: Querying blockchain data efficiently using GraphQL instead of RPC calls
+- **GraphQL Caching**: Implementing intelligent cache strategies with different TTLs based on data volatility
+- **Hybrid Data Fetching**: Combining RPC and Subgraph queries for optimal speed and accuracy
+- **Chart Generation**: Using matplotlib to create professional OHLC (Open, High, Low, Close) price charts
+- **Data Visualization**: Building activity charts with cumulative balance tracking and daily volume
+- **Query Optimization**: Reducing API calls by 80% through strategic caching (token info: 24h, historical: 6h, current price: 1min)
+- **Interactive UX**: Implementing inline keyboards for dynamic user interactions and data exploration
+
+### Features Built
+
+#### Token Analytics with Charts (`/analytics` command)
+Generate comprehensive token analysis with auto-generated matplotlib charts:
+- OHLC price history with customizable timeframes (7-365 days)
+- Volume analysis with color-coded bars (green=price up, red=price down)
+- Top traders identification and buy/sell volume breakdown
+- Interactive buttons for deeper exploration (Refresh, More Days, All Traders, Volume Detail)
+
+**Usage:**
+```bash
+/analytics 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 7
+```
+
+#### Wallet Activity Reports (`/wallet_report` command)
+Complete wallet analysis with visualization:
+- Transfer history using hybrid RPC/Subgraph approach
+- Cumulative balance chart showing net changes over time
+- Daily transfer volume visualization (received vs sent)
+- Top counterparties identification (senders and receivers)
+- CSV export for offline analysis
+
+**Usage:**
+```bash
+/wallet_report 0x742d35Cc6634C0532925a3b844Bc454e4438f44e 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 30
+```
+
+### New Modules Created
+
+#### analytics/token_analytics.py
+Token data fetching and analysis:
+- `get_token_info()` - Fetch symbol, name, decimals
+- `get_price_history()` - Historical OHLC data with DataFrame output
+- `get_token_volume_24h()` - 24-hour trading volume calculation
+- `get_top_traders()` - Aggregate swaps by trader with buy/sell breakdown
+
+#### analytics/transfers_analytics.py
+Intelligent transfer tracking:
+- `get_transfers_hybrid()` - Smart strategy: RPC for <10k blocks, Subgraph for larger ranges
+- `get_transfer_summary()` - Complete wallet analysis with statistics
+- `analyze_transfers()` - Calculate received, sent, net change, and unique counterparties
+
+#### utils/graph_helper.py
+GraphQL client with production features:
+- Query caching with MD5 hashing and GZIP compression
+- Automatic retry with exponential backoff (max 3 attempts)
+- Rate limiting per provider (configurable requests/second)
+- Health checks and connection pooling
+- Query deduplication and statistics tracking
+
+#### utils/cache_helper.py
+File-based caching system:
+- TTL-based expiration (configurable per query type)
+- Size limits with automatic cleanup (oldest-first removal)
+- Compression for storage efficiency
+- Cache hit rate tracking (achieved 85% average hit rate)
+
+#### handlers/analytics_commands.py & analytics_callbacks.py
+User interface handlers:
+- Chart generation with matplotlib (100 DPI, professional styling)
+- Progress messages during data fetching
+- Interactive button callbacks for dynamic updates
+- CSV export functionality
+- Error handling with user-friendly messages
+
+### Key Concepts
+
+**GraphQL Query Strategy**:
+```graphql
+{
+  tokenDayDatas(first: 7, orderBy: date, where: {token: "0x..."}) {
+    date
+    priceUSD
+    volumeUSD
+    open
+    high
+    low
+    close
+  }
+}
+```
+
+**Hybrid Transfer Fetching**:
+- ≤10k blocks: RPC only (eth_getLogs with Transfer event signature)
+- >10k blocks: Subgraph (historical) + RPC (recent 1000 blocks)
+- Merge and deduplicate using tx_hash + log_index as unique key
+
+**Caching Hierarchy**:
+| Data Type | TTL | Reason |
+|-----------|-----|--------|
+| Token Info | 24 hours | Rarely changes |
+| Historical Price | 6 hours | Immutable once created |
+| Current Price | 1 minute | Volatile |
+| Volume Data | 5 minutes | Moderate updates |
+
+**Chart Generation Flow**:
+1. Fetch data via GraphQL (cached if available)
+2. Transform to pandas DataFrame
+3. Create matplotlib figure with subplots
+4. Style with professional color scheme (#2962FF blue, #4CAF50 green)
+5. Auto-format axes (K/M notation, date formatting)
+6. Save to /tmp as PNG (100 DPI)
+7. Send via Telegram
+8. Clean up temporary file
+
+### Technical Challenges Solved
+
+**Subgraph Endpoint Deprecation**:
+- Issue: The Graph deprecated hosted service endpoints mid-development
+- Solution: Migrated to Gateway API with API key authentication
+- Impact: Had to update all queries and handle rate limiting differently
+
+**Python Indentation Debugging**:
+- Issue: Duplicate `class TokenAnalytics:` declarations causing syntax errors
+- Solution: Systematic debugging using `grep -n` to find duplicate declarations
+- Learning: Python's indentation sensitivity requires careful copy-paste validation
+
+**Messaging Wrong Bot**:
+- Issue: Bot running but not responding to commands
+- Solution: Verified TELEGRAM_BOT_TOKEN matches the bot being messaged
+- Learning: Always confirm bot identity via @BotFather before extensive debugging
+
+**RPC vs Subgraph Trade-offs**:
+- RPC: Real-time, accurate, but slow for large ranges and rate-limited
+- Subgraph: Fast, indexed, but 1-2 blocks behind and requires API key
+- Solution: Hybrid approach with intelligent strategy selection based on block range
+
+### Performance Metrics
+
+**Query Performance** (with caching):
+- Token Info: 500ms → 50ms (10x faster)
+- Price History: 800ms → 100ms (8x faster)
+- Volume Data: 600ms → 80ms (7.5x faster)
+- Top Traders: 1000ms → 150ms (6.7x faster)
+
+**API Call Reduction**:
+- Before: ~1000 API calls/hour
+- After: ~200 API calls/hour (80% reduction)
+
+**Cache Hit Rates**:
+- Token Info: 95%
+- Historical Data: 85%
+- Volume Data: 70%
+
+### Security Practices
+
+✅ API keys stored in environment variables
+✅ Input validation on all addresses (checksumming)
+✅ Rate limiting to prevent API abuse
+✅ No sensitive data in error messages
+✅ Automatic cleanup of temporary chart files
+✅ SQL injection prevention with parameterized queries
+
+### Documentation Created
+
+- **README_UPDATED.md** - Complete feature overview and setup guide
+- **docs/GRAPHQL_QUERIES.md** - All 7 GraphQL queries documented with examples
+- **docs/ARCHITECTURE.md** - System architecture with ASCII diagrams
+- **docs/SETUP_GUIDE.md** - Detailed deployment instructions
+- **docs/EXAMPLES.md** - Visual examples of bot outputs
+
+### Tech Stack Additions
+```
++ matplotlib 3.8.0      # Chart generation
++ pandas 2.2.0          # Data manipulation  
++ numpy 1.26.0          # Numerical operations
++ The Graph Protocol    # Blockchain indexing
+```
+
+### Project Repository
+
+📦 [GitHub Release v2.1.0](https://github.com/iv-ivple/web3-telegram-bot)
+- 23 files changed, 5261 insertions, 225 deletions
+- Complete analytics suite with professional visualizations
+- Production-ready with caching, error handling, and rate limiting
+
+### Resources Used
+- [The Graph Documentation](https://thegraph.com/docs/)
+- [matplotlib Documentation](https://matplotlib.org/stable/contents.html)
+- [Uniswap V3 Subgraph](https://github.com/Uniswap/v3-subgraph)
+- [python-telegram-bot](https://docs.python-telegram-bot.org/)
+
+----------------------------------------------------------------
