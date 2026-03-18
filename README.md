@@ -1,7 +1,7 @@
-# Web3 Learning Journey
+# Ethereum Dev Lab
 
 ## About
-This repository documents my journey learning Web3 development with Python.
+This repository documents my journey developing Web3 apps with Python.
 
 ## Environment
 - Python 3.10+
@@ -905,3 +905,146 @@ User interface handlers:
 - [python-telegram-bot](https://docs.python-telegram-bot.org/)
 
 ----------------------------------------------------------------
+----------------------------------------------------------------
+
+## Weeks 19-21: Enhanced Analytics API
+
+### What I Learned
+- **Redis Caching**: Using Redis as an in-memory cache layer to dramatically reduce RPC and API calls, with TTL-based expiration per data type
+- **Cache Invalidation**: Implementing pattern-based cache deletion, TTL strategies, and admin endpoints for manual invalidation
+- **Data Aggregation**: Building endpoints that combine multiple data sources (RPC + CoinGecko) into unified responses
+- **Flask Blueprints**: Organising analytics routes as separate Blueprint modules and registering them into the main app
+- **Render Redis Service**: Deploying and linking a managed Redis instance on Render using the auto-injected `REDIS_URL` environment variable
+- **Graceful Degradation**: Wrapping Redis calls in try/except so the API still returns data if the cache layer goes down
+- **Performance Optimisation**: Cutting RPC calls by caching results — repeated requests for the same address serve from memory in microseconds
+
+### New Endpoints
+
+#### `GET /analytics/portfolio/{address}`
+Full portfolio breakdown for an Ethereum address:
+- ETH balance with live USD price via CoinGecko
+- ERC-20 token balances for USDC, USDT, DAI, WETH
+- Total portfolio value in USD
+- Cached for 5 minutes (`TTL: 300s`)
+
+#### `GET /analytics/gas-spent/{address}?days=30`
+Historical gas analysis for outgoing transactions:
+- Total transaction count sent by the address
+- Configurable time window (1–365 days)
+- Cached for 1 hour (`TTL: 3600s`) — historical data doesn't change
+
+#### `GET /analytics/token-flows/{address}?days=7`
+Inbound and outbound ERC-20 transfer analysis:
+- Fetches Transfer event logs from Ethereum via `eth_getLogs`
+- Aggregates by token contract — transfer count and raw volume
+- Separate inflow and outflow breakdowns
+- Cached for 30 minutes (`TTL: 1800s`)
+
+### New Modules Created
+
+#### `api/analytics/portfolio.py`
+Portfolio aggregation logic:
+- `get_portfolio()` — fetches ETH + ERC-20 balances, prices, and total USD value
+- Reads from Redis cache first; falls back to RPC + CoinGecko on miss
+
+#### `api/analytics/gas.py`
+Gas usage analysis:
+- `get_gas_spent()` — retrieves outbound transaction count and gas history
+- Long TTL cache since historical data is immutable
+
+#### `api/analytics/token_flows.py`
+Token transfer flow tracking:
+- `get_token_flows()` — queries `eth_getLogs` for inbound and outbound ERC-20 transfers
+- Aggregates results by token contract address
+
+#### `api/cache/redis_client.py`
+Redis wrapper with production features:
+- Auto-connects via `REDIS_URL` on Render or falls back to `localhost` for local dev
+- `get()` / `set()` / `delete_pattern()` with JSON serialisation
+- Hit/miss tracking for monitoring cache effectiveness
+- Silent failure mode — if Redis is unavailable, API continues without cache
+
+### Key Concepts
+
+**Redis TTL Strategy**:
+| Data Type | TTL | Reason |
+|-----------|-----|--------|
+| ETH/token balance | 300s | Changes per block |
+| Token flows | 1800s | Semi-historical |
+| Gas history | 3600s | Historical — immutable |
+| ETH price | 60s | Volatile |
+
+**Cache Key Naming**: Keys follow `type:address:params` format (e.g. `portfolio:0xabc:eth`) enabling pattern-based invalidation with `delete_pattern("portfolio:0xabc*")` to wipe all cached data for a specific address.
+
+**Graceful Degradation**: All Redis calls are wrapped in try/except. If the cache layer is down, the API fetches fresh data and returns it without erroring — slower but functional.
+
+**`maxmemoryPolicy: allkeys-lru`**: Configured on the Render Redis service so that when memory fills up, the least recently used keys are evicted automatically rather than the service erroring out.
+
+### Infrastructure Changes
+
+**Render Deployment**:
+- Added a managed Redis service on Render (Free tier)
+- Linked to web service via auto-injected `REDIS_URL` environment variable
+- Updated `render.yaml` to declare both the web service and Redis service as code
+
+**GitHub Workflow**:
+- New analytics work developed on `feature/analytics-api` branch
+- Merged to `main` via Pull Request
+- Render auto-deployed on merge
+
+### Caching Architecture
+```
+Request → Flask Route
+              ↓
+         Redis Cache → HIT  → Return cached JSON (< 1ms)
+              ↓ MISS
+         RPC / CoinGecko → Process → Store in Redis → Return JSON
+```
+
+### Performance Impact
+| Endpoint | Without Cache | With Cache |
+|----------|--------------|------------|
+| `/analytics/portfolio` | ~1200ms | ~5ms |
+| `/analytics/gas-spent` | ~800ms | ~3ms |
+| `/analytics/token-flows` | ~1500ms | ~4ms |
+
+### Security Practices
+✅ `REDIS_URL` stored in Render environment variables (never committed)  
+✅ Address validation (checksum) on all endpoints  
+✅ TTL limits prevent stale sensitive data persisting indefinitely  
+✅ Cache failure is silent — no internal Redis errors exposed to API consumers  
+
+### Tech Stack Additions
+```
++ redis==5.0.1          # Redis Python client
++ Render Redis Service  # Managed Redis on Render (Free tier)
+```
+
+### Resources Used
+- [Redis Documentation](https://redis.io/docs/)
+- [Render Redis Docs](https://docs.render.com/redis)
+- [CoinGecko API](https://docs.coingecko.com/reference/introduction)
+- [Flask Blueprints](https://flask.palletsprojects.com/en/stable/blueprints/)
+
+----------------------------------------------------------------
+## Weeks 22–24: DEX Price Monitor
+
+### What I Learned
+- Uniswap V2 x*y=k AMM formula and reserve-based pricing
+- How to read Uniswap/SushiSwap pair contracts directly via web3.py
+- Slippage and price impact calculation from first principles
+- Multi-DEX price comparison and spread detection
+- Building a real-time dashboard with Flask + Redis + auto-refreshing JS
+
+### Key Endpoints
+- `GET /api/prices` — All pairs, all DEXes, with spread
+- `GET /api/prices/<pair>` — Single pair detail
+- `GET /api/slippage?pair=&dex=&amount=` — Slippage calculator
+- `GET /api/arbitrage?min_spread=` — Arbitrage opportunities
+
+### Architecture
+Request → Flask → Redis (15s TTL) → web3.py → Ethereum RPC
+
+-----------------------------------------------------------------
+
+
