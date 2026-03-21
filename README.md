@@ -1048,3 +1048,96 @@ Request → Flask → Redis (15s TTL) → web3.py → Ethereum RPC
 -----------------------------------------------------------------
 
 
+
+## Week 25: MEV, Flashbots & PBS
+
+### What I Learned
+- **The Mempool**: Every Ethereum node maintains its own local mempool — a waiting room for unconfirmed transactions. Its public visibility is what makes MEV extraction possible
+- **MEV (Miner/Maximal Extractable Value)**: Profit extracted by reordering, inserting, or censoring transactions within a block. Predominantly captured by DeFi traders via arbitrage and liquidations
+- **MEV Types**: Front-running (buy before victim), back-running (execute right after victim), and sandwiching (wrap victim's tx with a buy before and sell after)
+- **Priority Gas Auctions (PGAs)**: Pre-EIP-1559, bots competed by spamming increasingly high `gasPrice` bids into the public mempool — wasteful, congesting, and visible to everyone
+- **EIP-1559 Fee Model**: Replaced PGAs with a `baseFee` (burned, protocol-set) + `maxPriorityFee` (tip to validator). Bots now compete on priority fee instead of gas price
+- **Flashbots Bundles**: An ordered list of transactions submitted privately to a block builder. Land atomically (all-or-nothing) at a specific block — if not included, never exposed to the mempool
+- **Why Flashbots reduced congestion**: Moved the MEV bidding war off-chain and out of the public mempool. No more spam transactions, no more failed reverts consuming blockspace, no more gas price spikes hurting ordinary users
+- **MEV-Boost**: Flashbots middleware that implements PBS for PoS Ethereum. Validators run it as a sidecar to outsource block building to a competitive open market of specialised builders
+- **Proposer-Builder Separation (PBS)**: Splits the validator role in two — builders construct the most profitable block, proposers just pick the best bid. Levels the playing field for home stakers and is a planned Ethereum protocol upgrade
+
+### Scripts Created
+
+#### mempool_peek.py
+Connects to RPC and fetches a snapshot of the 10 most recent pending transactions from the pending block.
+
+**Usage:**
+```bash
+python3 scripts/mempool_peek.py
+```
+
+#### estimate_gas.py (extended from Week 3)
+Extended to fetch EIP-1559 fee data: current `baseFee`, estimated next block `baseFee` (max +12.5%), and suggested `maxPriorityFee`.
+
+**Usage:**
+```bash
+python3 scripts/estimate_gas.py
+```
+
+#### check_mev_boost.py
+Inspects a recent finalised block for MEV-Boost builder signatures in the `extraData` field. Known builders (beaverbuild, rsync-builder, Titan) leave recognisable strings.
+
+**Usage:**
+```bash
+python3 scripts/check_mev_boost.py
+```
+
+### Key Concepts
+
+**MEV Attack Types**:
+| Type | Position | Mechanism |
+|------|----------|-----------|
+| Front-run | Before victim | Higher priority fee to jump the queue |
+| Back-run | After victim | Slightly lower fee to land immediately after |
+| Sandwich | Both sides | Buy before + sell after victim's trade |
+
+**EIP-1559 Fee Structure**:
+- `baseFee` — set by the protocol, burned, adjusts ±12.5% per block based on fullness
+- `maxPriorityFee` — tip paid to the validator/builder
+- `maxFeePerGas` — absolute ceiling the sender will pay (`baseFee + priorityFee`)
+
+**Flashbots Bundle Flow**:
+```
+Searcher builds bundle
+     ↓
+Submit to relay (private RPC — never touches mempool)
+     ↓
+Block builder receives bundle + public mempool txs
+     ↓
+Builder constructs most profitable block
+     ↓
+Validator accepts highest-paying block via PBS
+     ↓
+Bundle included atomically (all txs land together or none do)
+```
+
+**PBS — Why it matters**:
+- Removes MEV advantage from large validators — home stakers earn MEV rewards without running extraction software
+- Creates censorship resistance via inclusion lists — proposers can force builders to include flagged transactions
+- Enables Danksharding — specialised builders handle the heavy proof computation required for 100k+ TPS scaling
+
+**MEV-Boost block detection**: Builders embed recognisable ASCII strings in the `extraData` field of blocks they produce. Reading `block['extraData'].decode('utf-8')` reveals the builder identity.
+
+### Bug Fixed
+Corrected `check_mev_boost.py`: `block.feeRecipient` and `block.extraData` (attribute-style) fail on web3.py `AttributeDict` — replaced with `block['miner']` and `block['extraData']` (dict-style access) throughout.
+
+### Security Practices
+✅ RPC URL stored in `.env` (never committed)
+✅ No private keys required for read-only MEV inspection scripts
+✅ Only connect MEV-Boost to trusted, verified relays
+
+### Resources Used
+- [EIP-1559 Specification](https://eips.ethereum.org/EIPS/eip-1559)
+- [Flashbots: Frontrunning the MEV Crisis](https://writings.flashbots.net/frontrunning-mev-crisis)
+- [Flashbots Bundle Documentation](https://docs.flashbots.net/flashbots-auction/advanced/understanding-bundles)
+- [MEV-Boost](https://boost.flashbots.net/)
+- [Ethereum PBS Roadmap](https://ethereum.org/roadmap/pbs/)
+- [MEV-Boost GitHub](https://github.com/flashbots/mev-boost)
+
+-----------------------------------------------------------------
