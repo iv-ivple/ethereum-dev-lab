@@ -1141,3 +1141,34 @@ Corrected `check_mev_boost.py`: `block.feeRecipient` and `block.extraData` (attr
 - [MEV-Boost GitHub](https://github.com/flashbots/mev-boost)
 
 -----------------------------------------------------------------
+## Weeks 25–27: MEV Fundamentals
+
+### What I Learned
+- Mempool dynamics and how transactions flow from broadcast to inclusion
+- MEV types: front-running, back-running, sandwiching, arbitrage, liquidations
+- Priority Gas Auctions and EIP-1559 fee mechanics
+- Flashbots bundle submission and MEV-Boost architecture
+- Proposer-Builder Separation (PBS) and its role in MEV supply chain
+
+### Scripts Created
+
+#### mev/mempool_peek.py
+Snapshots pending transactions from the mempool via HTTP RPC.
+
+#### mev/mempool_stream.py
+Streams pending transactions in real time via WebSocket subscription.
+
+#### mev/mempool_filter.py
+Filters pending transactions for large Uniswap swaps with input decoding.
+
+#### mev/check_mev_boost.py
+Checks whether a given block used MEV-Boost by inspecting extraData.
+
+#### mev/decode_arb.py
+Decodes ERC-20 Transfer events from an arbitrage transaction to reveal the hop chain.
+
+### Deliverable
+📄 mev_analysis_report.md — Analysis of 10 confirmed MEV transactions across sandwich, arbitrage, and liquidation types.
+
+--------------------------------------------------------
+
