@@ -1172,3 +1172,149 @@ Decodes ERC-20 Transfer events from an arbitrage transaction to reveal the hop c
 
 --------------------------------------------------------
 
+## Weeks 28–30: Arbitrage Theory
+
+### What I Learned
+- **Triangular Arbitrage**: How to exploit price imbalances across three token pairs in a cycle (e.g. WETH → USDC → DAI → WETH) using the Uniswap V2 constant product formula
+- **AMM Fee Compounding**: Each hop costs a 0.3% LP fee — three hops = ~0.9% minimum overhead before any profit is possible
+- **Accurate Gas Costing**: How to fetch live EIP-1559 fee data (`baseFee` + `priorityFee`) and convert gas units into ETH cost as the minimum profit threshold
+- **Price Impact Modelling**: How large position sizes move the price against you, and how to calculate per-hop price impact from first principles
+- **Optimal Input Sizing**: Gas cost is fixed while slippage scales with trade size — sweeping input amounts to find the profit-maximising position
+- **MEV Competition Dynamics**: Real-world bots bid up to ~90% of gross profit as priority fee in a Priority Gas Auction, making Flashbots bundle submission essential for viable arb
+- **Paper Trading**: Logging every scanned opportunity to JSON without risking real funds, then analysing hit rate, gas sensitivity, and time-of-day patterns
+
+### Scripts Created
+
+#### `multi_hop_quote.py`
+Simulates multi-hop swaps using live on-chain reserves. Applies the Uniswap V2 `amountOut` formula for each hop and calculates per-hop price impact. Accepts a slippage tolerance and returns `None` if any hop exceeds it.
+
+**Usage:**
+```bash
+python3 -c "from arb.multi_hop_quote import simulate_path; ..."
+```
+
+#### `gas_calculator.py`
+Fetches live EIP-1559 fee data and converts estimated gas units into an ETH cost. Includes per-operation gas constants for Uniswap V2 and V3 swaps.
+
+**Usage:**
+```bash
+python3 -c "from arb.gas_calculator import calculate_gas_cost_eth; ..."
+```
+
+#### `profit_engine.py`
+Core decision module. Combines gross profit, gas cost, and slippage into a net profit figure with USD conversion and ROI percentage. Returns a typed `ArbitrageOpportunity` dataclass.
+
+#### `competition_model.py`
+Models the MEV bidding war: given a number of competing bots and a bid fraction, estimates the realistic take-home after priority fee competition.
+
+#### `optimizer.py`
+Sweeps input amounts between a configurable min and max to find the position size that maximises net profit for a given triangle path.
+
+#### `paper_trader.py`
+Appends every scanned opportunity to `arb/paper_trades.json` and provides a `get_summary()` function returning hit rate, total simulated profit, and average opportunity size.
+
+#### `paths.py`
+Configuration file defining candidate triangles as structured path lists with pair addresses and input token per hop.
+
+#### `scanner.py`
+Single-scan logic: iterates all triangles in `paths.py`, calls `multi_hop_quote` and `gas_calculator`, and returns a list of results.
+
+#### `arbitrage_simulator.py` (Week 28–30 Deliverable)
+CLI entry point combining all modules into a complete arbitrage simulator.
+
+**Features:**
+- Single scan with opportunity summary
+- Continuous polling loop (one scan per block, ~12s interval)
+- Paper trade log summary with hit rate and profit statistics
+- Optimal input size finder per triangle
+
+**Usage:**
+```bash
+# Scan once and print all opportunities
+python3 arbitrage_simulator.py --scan
+
+# Run continuously and log to paper_trades.json
+python3 arbitrage_simulator.py --run --interval 12
+
+# Print summary of logged paper trades
+python3 arbitrage_simulator.py --summary
+
+# Find optimal input size for a named triangle
+python3 arbitrage_simulator.py --optimize --triangle "WETH→USDC→DAI→WETH"
+```
+
+### Key Concepts
+
+**Uniswap V2 AmountOut Formula**:
+```
+amountOut = (amountIn × 997 × reserveOut) / (reserveIn × 1000 + amountIn × 997)
+```
+The `997` factor encodes the 0.3% LP fee. Applied independently at each hop — losses compound across a triangle.
+
+**Triangular Arbitrage Profit Condition**:
+```
+(amountOut_hop3 / amountIn_hop1) > 1 + gas_cost_as_fraction_of_input
+```
+If the final output exceeds the input plus gas cost, the path is profitable in gross terms before competition.
+
+**Gas Cost Breakdown**:
+| Operation | Approx Gas Units |
+|-----------|-----------------|
+| ERC-20 transfer | ~86,000 |
+| Uniswap V2 swap | ~110,000 |
+| Uniswap V3 swap | ~130,000 |
+| 3-hop V2 triangle | ~330,000 |
+
+**Slippage vs Price Impact**:
+- **Slippage tolerance**: Maximum acceptable deviation from quoted price (e.g. 0.5%) — used to reject trades before submission
+- **Price impact**: Actual pool movement caused by the trade size — larger positions move the price against you
+
+**MEV Competition Model**:
+```
+Gross profit:          0.005 ETH
+Competitor bid (~90%): 0.0045 ETH priority fee
+Realistic take-home:   0.0005 ETH
+```
+Most opportunities found via public RPC scanning require Flashbots private bundle submission to be economically viable.
+
+**Optimal Input Size**: Gas cost is fixed regardless of trade size. This means profitability scales with input amount — until slippage from large trades cancels out the gain. The optimal input sits at the intersection of these two curves.
+
+### Project Structure
+```
+
+__init__.py
+multi_hop_quote.py      # AMM simulation + slippage check
+gas_calculator.py       # EIP-1559 gas cost engine
+profit_engine.py        # Net profit calculation
+competition_model.py    # MEV bidding war model
+optimizer.py            # Optimal input size sweep
+paper_trader.py         # JSON trade logger + summary
+paths.py                # Triangle path definitions
+scanner.py              # Single-scan orchestration
+
+arbitrage_simulator.py      # CLI entry point
+arb/paper_trades.json       # Generated trade log (gitignored)
+```
+
+### Paper Trading Results
+- Scanned triangles every ~12 seconds over a 48-hour period
+- Gross-profitable opportunities (before gas): ~2–4% of scans
+- Net-profitable after gas: <0.5% of scans on high-fee periods
+- Net-profitable after competition model: effectively 0% via public mempool
+- Conclusion: viable arb requires Flashbots bundle submission and sub-block latency
+
+### Security Practices
+✅ RPC URL stored in `.env` (never committed)
+✅ No private keys required — read-only simulation throughout
+✅ `paper_trades.json` added to `.gitignore`
+✅ No real transactions submitted at any point
+
+### Resources Used
+- [Uniswap V2 Whitepaper](https://uniswap.org/whitepaper.pdf)
+- [Uniswap V2 Core Contracts](https://github.com/Uniswap/v2-core)
+- [EIP-1559 Specification](https://eips.ethereum.org/EIPS/eip-1559)
+- [Flashbots Bundle Documentation](https://docs.flashbots.net/flashbots-auction/advanced/understanding-bundles)
+- [MEV-Boost](https://boost.flashbots.net/)
+
+--------------------------------------------------------
+
