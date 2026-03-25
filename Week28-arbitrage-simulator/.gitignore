@@ -1,12 +1,12 @@
 cat .gitignore
-```
 
-It should contain at least:
 ```
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+__pycache__/
+*.pyc
 *.so
 .Python
 venv/
@@ -41,5 +41,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-__pycache__/
-*.pyc
+paper_trades.json
+
