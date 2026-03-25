@@ -1,0 +1,45 @@
+cat .gitignore
+```
+
+It should contain at least:
+```
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Database
+*.db
+*.sqlite3
+instance/
+
+# Environment variables
+.env
+.env.docker
+.env.*
+
+# Logs
+logs/
+*.log
+
+# Coverage
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+__pycache__/
+*.pyc
