@@ -20,7 +20,7 @@ from dataclasses import fields
 # ---------------------------------------------------------------------------
 
 MINIMUM_VALID_ENV = {
-    "RPC_HTTP_URL": "https://mainnet.infura.io/v3/test",
+    "RPC_URL": "https://mainnet.infura.io/v3/test",
     "RPC_WS_URL": "wss://mainnet.infura.io/ws/v3/test",
     "KEEPER_ADDRESS": "0xDeadBeef00000000000000000000000000000001",
     "PRIVATE_KEY": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -108,7 +108,7 @@ class TestDefaults:
 
 class TestEnvVarLoading:
     def test_rpc_http_url_loaded(self, make_config):
-        cfg = make_config({"RPC_HTTP_URL": "https://rpc.example.com"})
+        cfg = make_config({"RPC_URL": "https://rpc.example.com"})
         assert cfg.rpc_http_url == "https://rpc.example.com"
 
     def test_rpc_ws_url_loaded(self, make_config):
@@ -216,7 +216,7 @@ class TestValidatePass:
 
 class TestValidateFail:
     @pytest.mark.parametrize("missing_key", [
-        "RPC_HTTP_URL",
+        "RPC_URL",
         "RPC_WS_URL",
         "KEEPER_ADDRESS",
         "PRIVATE_KEY",
@@ -227,8 +227,8 @@ class TestValidateFail:
         with pytest.raises((AssertionError, ValueError)):
             cfg.validate()
 
-    def test_validate_raises_for_empty_rpc_http_url(self, make_config):
-        cfg = make_config({"RPC_HTTP_URL": ""})
+    def test_validate_raises_for_empty_rpc_url(self, make_config):
+        cfg = make_config({"RPC_URL": ""})
         with pytest.raises((AssertionError, ValueError)):
             cfg.validate()
 

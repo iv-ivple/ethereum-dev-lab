@@ -7,7 +7,7 @@ load_dotenv()
 @dataclass
 class KeeperConfig:
     # Network
-    rpc_http_url: str = os.getenv("RPC_HTTP_URL", "")
+    rpc_http_url: str = os.getenv("RPC_URL", "")
     rpc_ws_url: str   = os.getenv("RPC_WS_URL", "")
 
     # Wallet
