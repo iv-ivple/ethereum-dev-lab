@@ -1,13 +1,13 @@
 from typing import Optional
 from keeper.scanner.opportunity_scanner import BaseScanner, Opportunity
-from arb.scanner import run_scan           # your existing scanner
+from arb.scanner import scan_once           # your existing scanner
 from arb.optimizer import find_optimal_input
 from gas.advanced_gas_calculator import calculate_arb_gas_cost
 from keeper.config import config
 
 class ArbStrategy(BaseScanner):
     async def scan(self, block_number: int) -> Optional[Opportunity]:
-        results = run_scan()  # returns list of ArbitrageOpportunity from Week 28–30
+        results = scan_once()  # returns list of ArbitrageOpportunity from Week 28–30
         if not results:
             return None
         best = max(results, key=lambda r: r.net_profit_eth)
