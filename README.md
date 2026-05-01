@@ -1540,3 +1540,239 @@ gas_toolkit.py                 # CLI entry point (Week 31–33 deliverable)
 - [Ethereum Yellow Paper — Appendix G: Fee Schedule](https://ethereum.github.io/yellowpaper/paper.pdf)
 
 --------------------------------------------------------
+
+--------------------------------------------------------
+
+## Weeks 34–37: Keeper Architecture Patterns
+
+### What I Learned
+- **Keeper Bot Architecture**: How production keeper bots are structured — the separation between listening, scanning, deciding, and executing as distinct, independently testable components
+- **Finite State Machines for Bots**: Modelling a keeper as a 7-state FSM (`IDLE → SCANNING → OPPORTUNITY_FOUND → EXECUTING → CONFIRMING → FAILED → COOLDOWN`) makes failure modes explicit and eliminates ambiguous "what is the bot doing right now?" situations
+- **Async WebSocket Event Listening**: Using `AsyncWeb3` with `WebSocketProvider` and `eth.subscribe("newHeads")` to receive block headers in real time rather than polling — reduces per-block latency from 1–3 seconds to under 100ms, with an auto-reconnect loop for node restarts and provider outages
+- **Pluggable Strategy Pattern**: Defining a `BaseScanner` abstract class with a single `scan(block_number) -> Optional[Opportunity]` method so any strategy (arbitrage, liquidation, upkeep) drops into the same pipeline without touching the orchestrator
+- **Structured JSON Logging**: Emitting machine-readable JSON log lines with consistent fields (`timestamp`, `level`, `state`, `tx_hash`, `profit_eth`) so sessions can be parsed and aggregated programmatically rather than grepped manually
+- **Production-Grade Transaction Submission**: The difference between sending a transaction and managing it — nonce locking, gas estimation with a safety buffer, receipt polling with a block-count timeout, and replacement transaction logic for stuck txs
+- **Failure Circuit Breaker**: Counting consecutive failures and triggering an orderly shutdown (with alert) after a configurable threshold prevents a broken keeper from draining the wallet on futile retries
+- **Dual-Channel Alerting**: Sending structured alerts to both Telegram and Discord with a consistent emoji taxonomy (`✅` success, `❌` failure, `🚨` critical, `🤖` lifecycle, `⚠️` warning, `📊` stats) so the bot's health is visible at a glance without reading logs
+- **Keeper State Persistence**: Logging every opportunity (detected, skipped, executed, reverted, timed out) and every run session to a database enables post-hoc analysis of hit rate, gas sensitivity, and time-of-day profitability patterns
+- **Open-Source Keeper Research**: Studied Chainlink Automation node internals, the Euler liquidation bot, MakerDAO's dss-cron, and Flashbots searcher examples to extract the architectural patterns that appear across all production keepers
+
+### Modules Created
+
+#### `keeper/state_machine.py`
+`KeeperState` enum defining all valid bot states and the transition table documenting which event causes each state change and what action it triggers. Single source of truth for bot behaviour — if a transition isn't in the table, it doesn't happen.
+
+#### `keeper/config.py`
+Dataclass-based configuration loader. Reads every tunable parameter from environment variables with typed defaults: RPC URLs, wallet address, private key, `MIN_PROFIT_ETH`, `MAX_GAS_GWEI`, `SLIPPAGE_BPS`, `MAX_CONSECUTIVE_FAILURES`, `COOLDOWN_SECONDS`, `TX_CONFIRM_TIMEOUT_BLOCKS`, Telegram/Discord credentials, and `DATABASE_URL`. Includes a `validate()` method that asserts required fields on startup.
+
+#### `keeper/logging_config.py`
+Custom `JSONFormatter` that serialises every log record to a single-line JSON object. Extra structured fields (`state`, `tx_hash`, `profit_eth`, `opportunity_id`) can be attached by callers via `extra={}`. Both console and file handlers use the same formatter so logs are parseable in both destinations.
+
+#### `keeper/listener/block_listener.py`
+Async WebSocket block header subscriber. Calls `on_new_block(block_number)` for every new head. Wraps the subscription in an infinite reconnect loop with a 5-second backoff — survives node restarts and provider interruptions without manual intervention.
+
+#### `keeper/listener/event_listener.py`
+Contract event subscriber built on `eth_getLogs`. Accepts a contract address, event ABI, and async callback. Tracks the last processed block and fetches only new logs on each call — used by strategies triggered by specific on-chain events (reserve updates, price deviations, collateral changes) rather than every block.
+
+#### `keeper/scanner/opportunity_scanner.py`
+Abstract base class defining the `BaseScanner` interface. Any strategy implements `async scan(block_number) -> Optional[Opportunity]`. The `Opportunity` dataclass carries `strategy`, `description`, `gross_profit_eth`, `gas_cost_eth`, `net_profit_eth`, `input_amount_eth`, and a `metadata` dict for strategy-specific execution data.
+
+#### `keeper/strategies/arb_strategy.py`
+Concrete `BaseScanner` implementation wiring in the Week 28–30 arbitrage modules. Calls `arb.scanner.run_scan()`, picks the highest net-profit result, applies the `MIN_PROFIT_ETH` floor, and returns a populated `Opportunity`. Demonstrates how existing code plugs into the framework with minimal changes.
+
+#### `keeper/calculator/profitability.py`
+Guardrailed profitability check layered on top of the Week 28–30 profit engine. Enforces three independent gates before execution is allowed: net profit above `MIN_PROFIT_ETH`, current `baseFeePerGas` below `MAX_GAS_GWEI`, and ROI above a 0.1% floor. Returns `(bool, reason_string)` so every rejection is logged with an explanation.
+
+#### `keeper/executor/tx_builder.py`
+Converts an `Opportunity` into a signed-ready EIP-1559 transaction dict. Fetches live gas parameters from the Week 31–33 `gas_oracle`, applies the `fast` speed profile, and dispatches to strategy-specific calldata builders. Gas limit is set as a conservative placeholder here and overwritten with `estimate_gas × 1.15` at signing time.
+
+#### `keeper/executor/tx_signer.py`
+Calls `w3.eth.estimate_gas()` on the built tx, applies a 15% buffer, then signs with `eth_account.Account.sign_transaction()`. Returns the raw hex transaction ready for broadcast.
+
+#### `keeper/executor/tx_submitter.py`
+Submits the raw transaction and polls for a receipt every 2 seconds. Raises `RuntimeError` on revert (status = 0) and `TimeoutError` if no receipt arrives within `TX_CONFIRM_TIMEOUT_BLOCKS`. Logs gas used and block number on success.
+
+#### `keeper/database/models.py`
+Two SQLAlchemy models: `Opportunity` (one row per detected opportunity, with status enum tracking it from `detected` → `executing` → `success / reverted / timeout / skipped`) and `KeeperRun` (one row per bot session, accumulating `blocks_scanned`, `opportunities_found`, `txs_success`, `txs_failed`, `total_profit_eth`, and `stop_reason`).
+
+#### `keeper/database/state_store.py`
+Helper layer over the ORM: `open_run()`, `close_run()`, `save_opportunity()`, `update_opportunity_status()`, and `get_stats_for_run()`. All keeper state that needs to survive a restart is written here.
+
+#### `keeper/alerting/telegram_alert.py`
+Async `httpx`-based Telegram sender reusing the bot token and chat ID from the Week 8–18 Telegram bot. Wrapped in `try/except` so alerting failures never propagate to the main loop.
+
+#### `keeper/alerting/discord_alert.py`
+Discord incoming webhook sender with the same silent-failure pattern. Configured via `DISCORD_WEBHOOK_URL` — optional, no-op if unset.
+
+#### `keeper/health_server.py`
+Minimal Flask endpoint (`GET /health`) running in a daemon thread alongside the async main loop. Returns the current stats dict as JSON. Enables external monitoring without tailing logs — `curl http://localhost:8080/health` shows live blocks scanned, opportunities found, and profit accumulated.
+
+#### `scripts/analyze_logs.py`
+Post-session log analyser. Reads the JSON log file, counts state distribution, tallies errors and successes, and sums logged `profit_eth` values. Used to evaluate keeper performance across sessions without a full database query.
+
+#### `keeper_bot.py` (Weeks 34–37 Deliverable)
+Main orchestrator. Instantiates all components, opens a `KeeperRun` session, and launches two concurrent async tasks: the `BlockListener` (which drives the full scan → decide → execute pipeline on every block) and a `stats_reporter` (which sends an hourly Telegram summary and resets the rolling counters). Handles graceful shutdown on max failures, SIGINT, and uncaught exceptions.
+
+**Usage:**
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with RPC URLs, private key, alert credentials
+
+# Run the keeper
+python3 keeper_bot.py
+
+# Check live stats
+curl http://localhost:8080/health
+
+# Analyse a completed session
+python3 scripts/analyze_logs.py keeper.log
+```
+
+### Key Concepts
+
+**Keeper State Machine**:
+```
+IDLE ──► SCANNING ──► OPPORTUNITY_FOUND ──► EXECUTING ──► CONFIRMING ──► IDLE
+                             │                                  │
+                     profitability                        revert / timeout
+                       check fails                              │
+                             │                              FAILED ──► COOLDOWN ──► IDLE
+                           IDLE                                 │
+                                                        max failures
+                                                              reached
+                                                                │
+                                                        SHUTTING_DOWN
+```
+
+**Pipeline Architecture**:
+```
+WebSocket
+    │ new block header
+    ▼
+BlockListener.on_new_block(block_number)
+    │
+    ▼
+BaseScanner.scan()          ← strategy-specific logic (arb, liquidation, upkeep)
+    │
+    ├── None → IDLE
+    │
+    └── Opportunity
+            │
+        is_profitable()?
+            │
+            ├── False → log skipped → IDLE
+            │
+            └── True
+                    │
+                build_tx() → sign_tx() → submit_and_confirm()
+                    │                           │
+                save to DB              ┌───────┴────────┐
+                                        │                │
+                                    Success           Failure
+                                        │                │
+                                  alert + IDLE    increment counter
+                                                        │
+                                               cooldown / shutdown
+```
+
+**WebSocket vs HTTP Polling**:
+| Method | Latency per block | Failure handling |
+|---|---|---|
+| HTTP polling (`eth_getBlockByNumber`) | 1–3 seconds | None — missed blocks if poll interval too long |
+| WebSocket (`eth.subscribe("newHeads")`) | <100ms | Reconnect loop required but latency is order-of-magnitude better |
+
+**Opportunity Dataclass**:
+```python
+@dataclass
+class Opportunity:
+    strategy: str           # e.g. "arb_triangle"
+    description: str        # e.g. "WETH→USDC→DAI→WETH"
+    gross_profit_eth: float
+    gas_cost_eth: float
+    net_profit_eth: float
+    input_amount_eth: float
+    metadata: dict          # strategy-specific execution data
+```
+
+**Alert Taxonomy**:
+| Emoji | Meaning | When fired |
+|---|---|---|
+| ✅ | Execution success | Transaction confirmed, profit logged |
+| ❌ | Execution failure | Revert, timeout, or submission error |
+| 🚨 | Critical — shutdown imminent | Consecutive failure threshold reached |
+| 🤖 | Lifecycle event | Bot start or stop |
+| ⚠️ | Warning | High gas, low wallet balance, missed blocks |
+| 📊 | Hourly stats report | Every 3600 seconds |
+
+**Circuit Breaker Pattern**:
+```
+consecutive_failures < MAX_CONSECUTIVE_FAILURES  →  COOLDOWN (sleep, retry)
+consecutive_failures >= MAX_CONSECUTIVE_FAILURES →  SHUTTING_DOWN (alert + exit)
+Any successful execution                         →  reset counter to 0
+```
+Prevents a misconfigured or market-broken keeper from looping indefinitely and exhausting gas.
+
+### Project Structure
+```
+keeper/
+├── __init__.py
+├── state_machine.py              # KeeperState enum + transition table
+├── config.py                     # Env-var config with validation
+├── logging_config.py             # Structured JSON log formatter
+├── listener/
+│   ├── block_listener.py         # WebSocket block header subscriber
+│   └── event_listener.py         # Contract event subscriber (eth_getLogs)
+├── scanner/
+│   └── opportunity_scanner.py    # BaseScanner ABC + Opportunity dataclass
+├── calculator/
+│   └── profitability.py          # Three-gate profitability check
+├── executor/
+│   ├── tx_builder.py             # Opportunity → EIP-1559 tx dict
+│   ├── tx_signer.py              # Gas estimation + eth_account signing
+│   └── tx_submitter.py           # Submit + receipt polling + timeout
+├── database/
+│   ├── models.py                 # Opportunity + KeeperRun ORM models
+│   └── state_store.py            # DB helper methods
+├── alerting/
+│   ├── telegram_alert.py         # Async Telegram sender
+│   └── discord_alert.py          # Discord webhook sender
+├── health_server.py              # Flask /health endpoint (daemon thread)
+└── strategies/
+    └── arb_strategy.py           # Week 28–30 arb modules as BaseScanner
+
+keeper_bot.py                     # Main orchestrator (Weeks 34–37 deliverable)
+scripts/analyze_logs.py           # Post-session log analyser
+keeper.log                        # JSON log file (gitignored)
+keeper.db                         # SQLite state database (gitignored)
+```
+
+### Modules Reused from Previous Weeks
+| Module | Source | Role in Keeper |
+|---|---|---|
+| `arb/scanner.py`, `arb/profit_engine.py` | Weeks 28–30 | Core of `ArbStrategy` scanner |
+| `gas/gas_oracle.py`, `gas/advanced_gas_calculator.py` | Weeks 31–33 | Gas pricing in `tx_builder` and `profitability` |
+| `mev/mempool_stream.py` patterns | Weeks 25–27 | WebSocket subscription pattern in `block_listener` |
+| Telegram bot handlers | Weeks 8–18 | Alert sender credentials and HTTP pattern |
+| SQLAlchemy ORM schema | Week 6 | Extended for `Opportunity` and `KeeperRun` models |
+| pytest fixtures and mocking patterns | Week 7 | Integration test suite using `AsyncMock` + `pytest-asyncio` |
+
+### Security Practices
+✅ Private key loaded from `.env` only — never logged, never appears in alerts or error messages
+✅ `keeper.log` and `keeper.db` added to `.gitignore`
+✅ Alerting failures are silent — a dead Telegram/Discord webhook cannot crash the keeper
+✅ Circuit breaker prevents runaway execution on repeated failures
+✅ Gas ceiling (`MAX_GAS_GWEI`) enforced before every execution — protects against submitting during fee spikes
+✅ All RPC URLs stored in `.env` (never committed)
+✅ Wallet balance checked in hourly stats report — low-balance warning fires before the bot runs dry
+
+### Resources Used
+- [Chainlink Automation Node Source](https://github.com/smartcontractkit/chainlink/tree/develop/core/services/keeper)
+- [Euler Liquidation Bot](https://github.com/euler-xyz/euler-liquidation-bot)
+- [Flashbots Searcher Sponsored Tx](https://github.com/flashbots/searcher-sponsored-tx)
+- [MakerDAO dss-cron](https://github.com/makerdao/dss-cron)
+- [web3.py Async WebSocket Provider](https://web3py.readthedocs.io/en/stable/providers.html#websocket-provider)
+- [pytest-asyncio](https://pytest-asyncio.readthedocs.io/)
+- [Chainlink Automation Docs](https://docs.chain.link/chainlink-automation)
+
+--------------------------------------------------------
