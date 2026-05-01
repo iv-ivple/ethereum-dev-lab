@@ -6,11 +6,14 @@ All raw SQLAlchemy session work lives here — nothing else should import Sessio
 
 Public API
 ----------
-  save_opportunity(opp_data)            -> Opportunity (row)
-  update_opportunity_status(id, status, **kwargs) -> None
-  get_stats_for_run(run_id)             -> dict
-  open_run()                            -> KeeperRun (row)
-  close_run(run_id, reason, stats)      -> None
+  StateStore(database_url)              -> class instance (used by keeper_bot.py)
+    .open_run()                         -> int (run_id)
+    .save_opportunity(opp, status, run_id) -> int (opp_id)
+    .update_opportunity_status(id, status, **kwargs) -> None
+    .close_run(run_id, stop_reason, stats) -> None
+    .get_stats_for_run(run_id)          -> dict
+
+  Module-level functions also available for standalone use.
 """
 
 from datetime import datetime, timezone
@@ -227,3 +230,122 @@ def get_stats_for_run(run_id: int) -> dict:
         }
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# StateStore class — used by keeper_bot.py as self.db = StateStore(url)
+# ---------------------------------------------------------------------------
+
+class StateStore:
+    """
+    Thin class wrapper around the module-level functions.
+    keeper_bot.py uses this as: self.db = StateStore(config.database_url)
+
+    Accepts database_url so it can create its own engine — easy to mock
+    in tests and swap URLs per environment.
+    """
+
+    def __init__(self, database_url: str):
+        self._engine = create_engine(
+            database_url,
+            pool_pre_ping=True,
+            future=True,
+        )
+        self._Session = sessionmaker(bind=self._engine, autocommit=False, autoflush=False)
+
+    def _get_session(self):
+        return self._Session()
+
+    def open_run(self) -> int:
+        """Insert a new KeeperRun row and return its id."""
+        session = self._get_session()
+        try:
+            run = KeeperRun(started_at=datetime.now(timezone.utc))
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            return run.id
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def save_opportunity(self, opp, status: str = "detected", run_id: int = None) -> int:
+        """
+        Persist an opportunity dataclass/object and return its DB id.
+        Accepts either a dict or an object with matching attributes.
+        """
+        session = self._get_session()
+        try:
+            db_opp = Opportunity(
+                strategy         = opp.strategy,
+                description      = opp.description,
+                gross_profit_eth = opp.gross_profit_eth,
+                gas_cost_eth     = opp.gas_cost_eth,
+                net_profit_eth   = opp.net_profit_eth,
+                input_amount_eth = opp.input_amount_eth,
+                status           = OpportunityStatus(status) if isinstance(status, str) else status,
+            )
+            session.add(db_opp)
+            session.commit()
+            session.refresh(db_opp)
+            return db_opp.id
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def update_opportunity_status(
+        self,
+        opportunity_id: int,
+        status: str,
+        *,
+        tx_hash: str | None = None,
+        gas_used: int | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        session = self._get_session()
+        try:
+            opp = session.get(Opportunity, opportunity_id)
+            if opp is None:
+                raise ValueError(f"Opportunity {opportunity_id} not found")
+            opp.status = OpportunityStatus(status) if isinstance(status, str) else status
+            if tx_hash is not None:
+                opp.tx_hash = tx_hash
+            if gas_used is not None:
+                opp.gas_used = gas_used
+            if error_message is not None:
+                opp.error_message = error_message
+            if status == "success":
+                opp.confirmed_at = datetime.now(timezone.utc)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def close_run(self, run_id: int, stop_reason: str, stats: dict) -> None:
+        session = self._get_session()
+        try:
+            run = session.get(KeeperRun, run_id)
+            if run is None:
+                raise ValueError(f"KeeperRun {run_id} not found")
+            run.stopped_at          = datetime.now(timezone.utc)
+            run.stop_reason         = stop_reason
+            run.blocks_scanned      = stats.get("blocks",        run.blocks_scanned)
+            run.opportunities_found = stats.get("opportunities", run.opportunities_found)
+            run.txs_success         = stats.get("success",       run.txs_success)
+            run.txs_failed          = stats.get("failed",        run.txs_failed)
+            run.total_profit_eth    = stats.get("profit",        run.total_profit_eth)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_stats_for_run(self, run_id: int) -> dict:
+        return get_stats_for_run(run_id)
