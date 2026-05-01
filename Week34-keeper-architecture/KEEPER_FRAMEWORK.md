@@ -58,7 +58,7 @@ BlockListener ──► KeeperBot.on_new_block(block_number)
 | `keeper/alerting/` | Telegram and Discord alert helpers |
 | `keeper/health_server.py` | Flask `/health` endpoint — live stats without tailing logs |
 | `keeper_bot.py` | Orchestrator — wires all components, owns the state machine |
-| `scripts/analyze_logs.py` | Post-run log analyser — errors, state transitions, profit summary |
+| `keeper/scripts/analyze_logs.py` | Post-run log analyser — errors, state transitions, profit summary |
 
 ---
 
@@ -104,7 +104,7 @@ curl http://localhost:8080/health
 **6. Analyse logs after a run**
 
 ```bash
-python scripts/analyze_logs.py
+python keeper/scripts/analyze_logs.py
 # Parses structured JSON logs and prints a summary of errors, state transitions, and profit per block
 ```
 
@@ -312,7 +312,8 @@ Week34-keeper-architecture/
 │       ├── test_config.py         # Config loading + validation
 │       └── integration/
 │           └── test_keeper_pipeline.py  # Full pipeline mock tests
-└── scripts/
-    ├── migrate_keeper_db.py       # Create DB tables (idempotent)
+├── scripts/
+│   └── migrate_keeper_db.py       # Create DB tables (idempotent)
+└── keeper/scripts/
     └── analyze_logs.py            # Parse structured JSON logs, summarise errors + profit
 ```
