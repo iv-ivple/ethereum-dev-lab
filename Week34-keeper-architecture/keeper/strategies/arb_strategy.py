@@ -1,3 +1,4 @@
+from typing import Optional
 from keeper.scanner.opportunity_scanner import BaseScanner, Opportunity
 from arb.scanner import run_scan           # your existing scanner
 from arb.optimizer import find_optimal_input
