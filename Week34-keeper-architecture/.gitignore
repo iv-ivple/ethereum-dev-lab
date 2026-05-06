@@ -48,3 +48,11 @@ chainlink/
 dss-cron/
 euler-liquidation-bot/
 searcher-sponsored-tx/
+config.py
+gas_calculator.py
+multi_hop_quote.py
+paths.py
+keeper/config.py~
+keeper.db
+__pycache__/
+*.pyc
