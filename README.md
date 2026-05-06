@@ -1776,3 +1776,207 @@ keeper.db                         # SQLite state database (gitignored)
 - [Chainlink Automation Docs](https://docs.chain.link/chainlink-automation)
 
 --------------------------------------------------------
+
+--------------------------------------------------------
+
+## Weeks 38–40: Aave Liquidation Watcher
+
+### What I Built
+A domain-specific keeper bot that monitors Aave V3 positions on Sepolia testnet in real time, stores a full time-series of position snapshots in PostgreSQL, and fires colour-coded Discord alerts when health factors fall to dangerous levels. All liquidation output is simulation only — the bot never submits transactions.
+
+### Features
+- ✅ Real-time health factor monitoring via `web3.py` + async polling (APScheduler)
+- ✅ PostgreSQL persistence — every poll cycle saves a position snapshot with full collateral/debt/LTV data
+- ✅ Discord webhook notifications — rich embeds, colour-coded WARNING 🟠 and CRITICAL 🔴 by threshold
+- ✅ Hourly heartbeat message to Discord confirming the bot is alive
+- ✅ Alert deduplication — unique DB index prevents more than one alert per wallet per type per hour
+- ✅ Liquidation simulation — calculates theoretical profit (close factor, liquidation bonus) without executing
+- ✅ Wallet management CLI (`cli.py`) — add, list, and deactivate monitored wallets
+- ✅ Graceful shutdown — SIGINT/SIGTERM handled cleanly, asyncpg pool closed properly
+- ✅ Retry logic — failed RPC calls retried up to 3 times with backoff before giving up
+- ⚠️ Live alert from real position — blocked by Aave removing Sepolia from their UI mid-week; all code paths verified, alert logic confirmed correct, infrastructure blocked externally
+
+### Tech Stack
+- Python 3.11+ / asyncio
+- web3.py (Aave Pool contract via `getUserAccountData`)
+- asyncpg (async PostgreSQL driver)
+- APScheduler (async poll scheduler + hourly cron)
+- aiohttp (async Discord webhook HTTP client)
+- pydantic-settings (typed `.env` config with validation)
+- PostgreSQL 14+
+
+### Project Structure
+```
+aave-watcher/
+├── src/
+│   ├── main.py          ← Entry point, APScheduler setup, graceful shutdown
+│   ├── watcher.py       ← Poll loop: fetch → snapshot → alert decision
+│   ├── aave.py          ← getUserAccountData via web3.py, unit conversion, liquidation sim
+│   ├── db.py            ← asyncpg pool, wallet/snapshot/alert queries
+│   ├── notifier.py      ← Discord embed builder + webhook sender
+│   ├── config.py        ← pydantic-settings Config class
+│   └── cli.py           ← Wallet management CLI (add / list / deactivate)
+├── migrations/
+│   └── 001_init.sql     ← wallets, position_snapshots, alerts tables + dedup index
+├── .env                 ← RPC URL, DB URL, Discord webhook, thresholds (gitignored)
+└── requirements.txt
+```
+
+### Database Schema
+
+```sql
+wallets              -- monitored addresses with optional label and active flag
+position_snapshots   -- health_factor, collateral, debt, LTV per wallet per poll cycle
+alerts               -- alert log with unique index preventing duplicate hourly alerts
+```
+
+The dedup constraint uses `date_trunc('hour', sent_at)` so at most one WARNING and one CRITICAL Discord message is sent per wallet per hour, regardless of how many poll cycles run.
+
+### Key Concepts
+
+**Aave Health Factor**:
+```
+Health Factor = (Total Collateral × Liquidation Threshold) / Total Debt
+
+HF > 1.5   →  Healthy
+HF < 1.5   →  WARNING — approaching liquidation zone
+HF < 1.1   →  CRITICAL — liquidation imminent
+HF < 1.0   →  Liquidatable — a keeper can call liquidationCall()
+HF = ∞     →  No debt (getUserAccountData returns uint256 max)
+```
+
+**Aave Contract Units**:
+```python
+WAD  = 10 ** 18   # Health factor scale: 1e18 = HF of 1.0
+BASE = 10 ** 8    # USD value scale: 1e8 = $1.00
+# LTV and liquidation threshold are in basis points: 8000 = 80%
+health_factor = raw_health_factor / WAD
+collateral_usd = total_collateral_base / BASE
+ltv_pct = ltv_raw / 100
+```
+
+**Liquidation Simulation (Educational)**:
+```python
+CLOSE_FACTOR      = 0.5    # Max 50% of debt can be repaid per liquidation
+LIQUIDATION_BONUS = 1.05   # Liquidator receives 5% extra collateral
+
+debt_to_repay   = total_debt_usd * CLOSE_FACTOR
+collateral_gain = debt_to_repay * LIQUIDATION_BONUS
+profit          = collateral_gain - debt_to_repay
+# Never executed — displayed for educational/monitoring purposes only
+```
+
+**Alert Deduplication Pattern**:
+```sql
+CREATE UNIQUE INDEX idx_alerts_dedup
+    ON alerts(wallet_id, alert_type, date_trunc('hour', sent_at));
+-- INSERT raises UniqueViolationError if same wallet + type already alerted this hour
+-- Python catches asyncpg.UniqueViolationError → returns False → no Discord send
+```
+
+**Async Architecture**:
+```
+asyncio event loop
+    │
+    ├── APScheduler (interval: 60s)  → run_poll_cycle()
+    │       └── for each wallet:
+    │               get_user_position()    ← web3.py async RPC call
+    │               save_snapshot()        ← asyncpg INSERT
+    │               record_alert()         ← asyncpg INSERT (dedup)
+    │               send_alert()           ← aiohttp POST to Discord
+    │
+    └── APScheduler (cron: hourly)   → send_heartbeat()
+```
+
+**pydantic-settings Config Pattern**:
+```python
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+    rpc_url: str                        # Required — raises on missing
+    health_factor_warning: float = 1.5  # Optional with default
+    seed_wallets: List[str] = []
+
+    @field_validator("seed_wallets", mode="before")
+    @classmethod
+    def parse_seed_wallets(cls, v):
+        if isinstance(v, str):
+            return [w.strip().lower() for w in v.split(",") if w.strip()]
+        return v
+```
+
+**Retry Wrapper**:
+```python
+async def _with_retry(coro_fn, retries=3, delay=2.0):
+    for attempt in range(retries):
+        try:
+            return await coro_fn()
+        except Exception as exc:
+            if attempt == retries - 1:
+                raise
+            await asyncio.sleep(delay)
+```
+
+### Week Checklist
+| Day | Task | Status |
+|-----|------|--------|
+| Day 1 | Environment setup, `.env`, PostgreSQL created | ✅ |
+| Day 2 | `config.py`, `db.py`, migration applied, DB connection verified | ✅ |
+| Day 3 | `aave.py` reading live positions from Sepolia contract | ✅ |
+| Day 4 | `notifier.py`, Discord webhook sending rich embeds | ✅ |
+| Day 5 | `watcher.py` + `main.py` full async poll loop running | ✅ |
+| Day 6 | Real WARNING/CRITICAL alert from a live position | ⚠️ Blocked — Aave removed Sepolia UI |
+| Day 7 | `cli.py` working, graceful shutdown and retry logic tested | ✅ |
+
+> **Day 6 note:** Aave removed Sepolia from their production frontend during this week, making it impossible to create a test borrow position through the standard UI. All alert code paths are verified correct — the CRITICAL branch, Discord embed format, and dedup logic all work. The blocker is purely external infrastructure, not the bot implementation.
+
+### Usage
+```bash
+# Activate virtualenv
+source venv/bin/activate
+
+# Manage monitored wallets
+python -m src.cli add 0xYourAddress "My test position"
+python -m src.cli list
+python -m src.cli deactivate 0xYourAddress
+
+# Run the watcher
+python -m src.main
+
+# Run migration (first time only)
+psql $DATABASE_URL -f migrations/001_init.sql
+
+# Query position history
+psql $DATABASE_URL -c "
+SELECT w.address, s.health_factor, s.total_debt_usd, s.recorded_at
+FROM position_snapshots s
+JOIN wallets w ON w.id = s.wallet_id
+ORDER BY s.recorded_at DESC LIMIT 20;"
+```
+
+### Security Practices
+✅ `.env` gitignored — RPC URL, DB credentials, and Discord webhook never committed
+✅ pydantic-settings raises clearly on missing required vars — no silent misconfiguration
+✅ Discord webhook failures are caught and logged — notifier errors never crash the poll loop
+✅ Wallet addresses normalised to lowercase before DB insert — no duplicate address bugs
+✅ asyncpg parameterised queries throughout — no SQL injection surface
+
+### Modules Reused from Previous Weeks
+| Pattern | Source | Role Here |
+|---|---|---|
+| asyncpg pool pattern | Week 6 (SQLAlchemy) → extended | Async DB client for snapshots and alerts |
+| APScheduler async jobs | Weeks 8–18 (Flask API) | Recurring poll cycle and heartbeat |
+| Discord webhook sender | Weeks 34–37 (keeper alerting) | `discord_alert.py` pattern reused directly |
+| `.env` + pydantic-settings | Weeks 31–33 (gas oracle) | Config validation pattern |
+| Retry wrapper | Weeks 34–37 (tx_submitter) | Adapted for async RPC calls |
+
+### Resources Used
+- [Aave V3 Developer Docs](https://docs.aave.com/developers/)
+- [Aave V3 Testnet Contract Addresses](https://docs.aave.com/developers/deployed-contracts/v3-testnet-addresses)
+- [Aave App (Sepolia)](https://app.aave.com)
+- [web3.py Async Provider Docs](https://web3py.readthedocs.io/en/stable/providers.html)
+- [asyncpg Documentation](https://magicstack.github.io/asyncpg/current/)
+- [APScheduler Documentation](https://apscheduler.readthedocs.io/en/3.x/)
+- [Discord Webhook Reference](https://discord.com/developers/docs/resources/webhook)
+- [Sepolia Faucet](https://sepoliafaucet.com)
+
+--------------------------------------------------------
