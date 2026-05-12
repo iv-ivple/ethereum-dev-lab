@@ -1,0 +1,28 @@
+# Environment variables - NEVER COMMIT THESE
+.env
+*.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test wallets (if you create any)
+test_wallet.json
+keystore/
